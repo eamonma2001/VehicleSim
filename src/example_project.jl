@@ -1,11 +1,30 @@
+include("./tools/astar.jl")
+
+struct SimpleVehicleState
+    p1::Float64
+    p2::Float64
+    θ::Float64
+    v::Float64
+    l::Float64
+    w::Float64
+    h::Float64
+end
+
+struct FullVehicleState
+    position::SVector{3, Float64}
+    velocity::SVector{3, Float64}
+    orientation::SVector{3, Float64}
+    angular_vel::SVector{3, Float64}
+end
+
 struct MyLocalizationType
-    field1::Int
-    field2::Float64
+    last_update::Float64
+    x::FullVehicleState
 end
 
 struct MyPerceptionType
-    field1::Int
-    field2::Float64
+    last_update::Float64
+    x::Vector{SimpleVehicleState}
 end
 
 function localize(gps_channel, imu_channel, localization_state_channel)
@@ -53,20 +72,156 @@ function perception(cam_meas_channel, localization_state_channel, perception_sta
     end
 end
 
+function if_in_segments(seg, ego_location)
+    lb_1 = seg.lane_boundaries[1]
+    if length(seg.lane_boundaries) == 2
+        lb_2 = seg.lane_boundaries[2]
+    else
+        lb_2 = seg.lane_boundaries[3]
+    end
+
+    pt_a = lb_1.pt_a
+    pt_b = lb_1.pt_b
+    pt_c = lb_2.pt_a
+    pt_d = lb_2.pt_b
+
+    curvature = lb_1.curvature
+    curved = !isapprox(curvature, 0.0; atol=1e-6)
+    delta = pt_b-pt_a
+    delta2 = pt_d-pt_b
+    if !curved
+        pt = 0.25*(pt_a+pt_b+pt_c+pt_d)
+        check = abs(pt[1] - ego_location[1])
+        check2 = abs(pt[2] - ego_location[2])
+        if delta[1] == 0    
+            if check < abs(delta2[1]/2) 
+                if check2 < abs(delta[2]/2) 
+                    return true
+                else
+                    return false
+                end
+            else
+                return false
+            end
+        elseif delta[2] == 0
+            if check < abs(delta[1]/2) 
+                if check2 < abs(delta2[2]/2) 
+                    return true
+                else
+                    return false
+                end
+            else
+                return false
+            end
+        end
+    else
+        rad = 1.0 / abs(curvature)
+        dist = π*rad/2.0
+        left = curvature > 0
+
+        rad_1 = rad
+        #@info "rad_1: $rad_1"
+        rad_2 = abs(pt_d[1]-pt_c[1])
+        #@info "rad_2: $rad_2"
+
+        if left
+            if sign(delta[1]) == sign(delta[2])
+                center = pt_a + [0, delta[2]]
+            else
+                center = pt_a + [delta[1], 0]
+            end
+        else
+            if sign(delta[1]) == sign(delta[2])
+                center = pt_a + [delta[1], 0]
+            else
+                center = pt_a + [0, delta[2]]
+            end
+        end
+
+        r = (ego_location[1:2]-center[1:2])'*(ego_location[1:2]-center[1:2])
+        #@info "center: $center, r: $r"
+        if r < rad_1*rad_1
+            return false
+        end
+        if r > rad_2*rad_2
+            return false
+        end
+        if r > rad_1*rad_1
+            if rad_2*rad_2 < r
+                if left
+                    if sign(delta[1]) == sign(delta[2])
+                        if ego_location[1] < center[1] 
+                            if ego_location[2] > center[2]
+                                return true
+                            end
+                        end
+                    end
+                else
+                    if ego_location[1] < center[1] 
+                        if ego_location[2] < center[2]
+                            return true
+                        end
+                    end
+                end
+            else
+                if sign(delta[1]) == sign(delta[2])
+                    if ego_location[1] < center[1] 
+                        if ego_location[2] > center[2]
+                            return true
+                        end
+                    end
+                else
+                    if ego_location[1] > center[1]
+                        if ego_location[2] > center[2]
+                            return true
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return false
+end
+
 function decision_making(localization_state_channel, 
         perception_state_channel, 
         map, 
         target_road_segment_id, 
-        socket)
-    # do some setup
-    while true
-        latest_localization_state = fetch(localization_state_channel)
-        latest_perception_state = fetch(perception_state_channel)
+        socket,  gt_channel)
+    goal = map[target_road_segment_id]
+    initial_localization_state = take!(gt_channel)
 
+    ego_position = initial_localization_state.position
+    @info "initial position: $ego_position"
+    for i in map.path
+        if if_in_segments(i, ego_position)
+            initial_segment = i
+            @info "intial segment: $initial_segment"
+        end
+    end
+    
+    res = a_star_solver(map, initial_segment, goal)
+    for i in 1:200
+        latest_localization_state = take!(gt_channel)
+        # @info "latest_localization_state: $latest_localization_state"
+        # latest_perception_state = fetch(perception_state_channel)
+        if if_in_segments(goal, latest_localization_state.position)
+            break
+        end
+        for i in res.path
+            if if_in_segments(i,latest_localization_state.position)
+                cur_seg = i
+            end
+        end        
         # figure out what to do ... setup motion planning problem etc
         steering_angle = 0.0
         target_vel = 0.0
-        cmd = VehicleCommand(steering_angle, target_vel, true)
+        curvature = cur_seg.lane_boundaries[1].curvature
+        if !isapprox(curvature, 0.0; atol=1e-6)
+            steering_angle = curvature
+        end
+        target_vel = cur_seg.speed_limit
+        cmd = VehicleCommand(steering_angle, 10, true)
         serialize(socket, cmd)
     end
 end
