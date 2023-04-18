@@ -1,3 +1,5 @@
+using("../measurement.jl")
+
 """
 Create functions which accepts X¹, X², X³, r¹, r², r³, track_center, track_radius, lane_width, as input, and each return
 one of the 5 callbacks which constitute an IPOPT problem: 
@@ -17,7 +19,7 @@ updated world information into planning problems that IPOPT can solve.
 function create_callback_generator(localization_state_channel, 
     perception_state_channel, 
     cur_seg, 
-    socket,  gt_channel)
+    socket)
     
     # trajectory_length=40, timestep=0.2, R = Diagonal([0.1, 0.5]), max_vel=10.0)
     # Define symbolic variables for all inputs, as well as trajectory
@@ -25,11 +27,17 @@ function create_callback_generator(localization_state_channel,
     #     @variables(X¹[1:4], X²[1:4], X³[1:4], r¹, r², r³, track_center[1:2], track_radius, lane_width, Z[1:6*trajectory_length]) .|> Symbolics.scalarize
     # end
 
+    Z = let
+         @variables(Z[1:6*trajectory_length]) .|> Symbolics.scalarize
+    nd
+
     # states, controls = decompose_trajectory(Z)
     # all_states = [[X¹,]; states]
     # vehicle_2_prediction = constant_velocity_prediction(X², trajectory_length, timestep)
     # vehicle_3_prediction = constant_velocity_prediction(X³, trajectory_length, timestep)
-    cost_val = sum(stage_cost(x, u, R) for (x,u) in zip(states, controls))
+
+    # cost_val = sum(stage_cost(x, u, R) for (x,u) in zip(states, controls))
+    cost_val = 0
     cost_grad = Symbolics.gradient(cost_val, Z)
 
     constraints_val = Symbolics.Num[]
@@ -60,13 +68,14 @@ function create_callback_generator(localization_state_channel,
         for i in 1:length(latest_perception_state.x)
             other_vehicle = latest_perception_state.x[i]
             append!(constraints_val, collision_constraint(latest_localization_state, other_vehicle, ϵ))
-            append!(constraints_lb, zeros(2))
-            append!(constraints_ub, fill(Inf, 2))
+            append!(constraints_lb, 0)
+            append!(constraints_ub, Inf)
         end
         
+        vel = norm(latest_localization_state.velocity)
         append!(constraints_val, vel)
         append!(constraints_lb, 0.0)
-        append!(constraints_ub, seg.speed_limit)
+        append!(constraints_ub, cur_seg.speed_limit)
         
         #append!(constraints_val, states[k][4])
         #append!(constraints_lb, -pi/4)
@@ -99,13 +108,13 @@ function create_callback_generator(localization_state_channel,
     end
 
     full_constraint_fn = let
-        constraint_fn! = Symbolics.build_function(constraints_val, [Z; X¹; X²; X³; r¹; r²; r³; track_center; track_radius; lane_width]; expression)[2]
-        (cons, Z, X¹, X², X³, r¹, r², r³, track_center, track_radius, lane_width) -> constraint_fn!(cons, [Z; X¹; X²; X³; r¹; r²; r³; track_center; track_radius; lane_width])
+        constraint_fn! = Symbolics.build_function(constraints_val, [Z; localization_state_channel; perception_state_channel; cur_seg; socket]; expression)[2]
+        (cons, localization_state_channel, perception_state_channel, cur_seg; socket) -> constraint_fn!(cons, [localization_state_channel; perception_state_channel; cur_seg; socket])
     end
 
     full_constraint_jac_vals_fn = let
-        constraint_jac_vals_fn! = Symbolics.build_function(jac_vals, [Z; X¹; X²; X³; r¹; r²; r³; track_center; track_radius; lane_width]; expression)[2]
-        (vals, Z, X¹, X², X³, r¹, r², r³, track_center, track_radius, lane_width) -> constraint_jac_vals_fn!(vals, [Z; X¹; X²; X³; r¹; r²; r³; track_center; track_radius; lane_width])
+        constraint_jac_vals_fn! = Symbolics.build_function(constraints_val, [Z; localization_state_channel; perception_state_channel; cur_seg; socket]; expression)[2]
+        (cons, localization_state_channel, perception_state_channel, cur_seg; socket) -> constraint_jac_vals_fn!(cons, [localization_state_channel; perception_state_channel; cur_seg; socket])
     end
     
     full_hess_vals_fn = let
@@ -139,16 +148,16 @@ Predict a dummy trajectory for other vehicles.
 #     states
 # end
 
-"""
-The physics model used for motion planning purposes.
-Returns X[k] when inputs are X[k-1] and U[k]. 
-Uses a slightly different vehicle model than presented in class for technical reasons.
-"""
-function evolve_state(X, U, Δ)
-    V = X[3] + Δ * U[1] 
-    θ = X[4] + Δ * U[2]
-    X + Δ * [V*cos(θ), V*sin(θ), U[1], U[2]]
-end
+# """
+# The physics model used for motion planning purposes.
+# Returns X[k] when inputs are X[k-1] and U[k]. 
+# Uses a slightly different vehicle model than presented in class for technical reasons.
+# """
+# function evolve_state(X, U, Δ)
+#     V = X[3] + Δ * U[1] 
+#     θ = X[4] + Δ * U[2]
+#     X + Δ * [V*cos(θ), V*sin(θ), U[1], U[2]]
+# end
 
 function lane_constraint_curve_lower(latest_localization_state, seg)
     #a'*(X[1:2] - a*r)-b
@@ -259,16 +268,32 @@ end
 """
 ϵ defines the min distance between two vehicles.
 """
-function collision_constraint(X1, X2, ϵ = 1.0)
-    (X1.position[1:2]-[X2.p1; X2:p2])'*(X1.position[1:2]-[X2.p1; X2:p2]) - (2*14.3781+ϵ)^2
+function collision_constraint(X1::FullVehicleState, X2::SimpleVehicleState, ϵ = 0.5)
+    I = [1 0; 0 1]
+    P = [I -I; -I I]
+    q = zeros(4) 
+    quat = X1.orientation
+    A1 = inv(Rot_from_quat(quat))
+    A2 = inv([cos(X2.θ) -sin(X2.θ); sin(X2.θ) cos(X2.θ)])
+    A = [A1 zeros(2,2);zeros(2,2) A2]
+    l1 = [-13.2*0.5; -5.7*0.5] + A1*[X1.position[1]; X1.position[2]]
+    l2 = [-X2.l*0.5; -X2.w*0.5] + A2*[X2.p1; X2.p2]
+    u1 = [13.2*0.5; 5.7*0.5] + A1*[X1.position[1]; X1.position[2]]
+    u2 = [X2.l*0.5; X2.w*0.5] + A2*[X2.p1; X2.p2]
+    l = [l1;l2]
+    u = [u1;u2]
+    m = OSQP.Model()
+    OSQP.setup!(m; P=sparse(P), q=q, A=sparse(A), l=l, u=u, polish = true)
+    results = OSQP.solve!(m)
+    results.info.obj_val - ϵ 
 end
 
-"""
-Cost at each stage of the plan
-"""
-function stage_cost(X, U, R)
-    cost = -0.1*X[3] + U'*R*U
-end
+# """
+# Cost at each stage of the plan
+# """
+# function stage_cost(X, U, R)
+#     cost = -0.1*X[3] + U'*R*U
+# end
 
 
 """

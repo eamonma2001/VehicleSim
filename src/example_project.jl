@@ -1,4 +1,5 @@
 include("./tools/astar.jl")
+#include("./trajectory/HW2.jl")
 
 struct SimpleVehicleState
     p1::Float64
@@ -13,7 +14,7 @@ end
 struct FullVehicleState
     position::SVector{3, Float64}
     velocity::SVector{3, Float64}
-    orientation::SVector{3, Float64}
+    orientation::SVector{4, Float64}
     angular_vel::SVector{3, Float64}
 end
 
@@ -139,15 +140,22 @@ function if_in_segments(seg, ego_location)
         end
 
         r = (ego_location[1:2]-center[1:2])'*(ego_location[1:2]-center[1:2])
-        #@info "center: $center, r: $r"
-        if r < rad_1*rad_1
+        #@info "center: $center, r^2: $r"
+        if rad_1 < rad_2
+            min = rad_1#min(rad_1,rad_2)
+            max = rad_2#max(rad_1,rad_2)
+        else
+            min = rad_2#min(rad_1,rad_2)
+            max = rad_1#max(rad_1,rad_2)
+        end
+        if r < min*min
             return false
         end
-        if r > rad_2*rad_2
+        if r > max*max
             return false
         end
-        if r > rad_1*rad_1
-            if rad_2*rad_2 < r
+        if r > min*min
+            if max*max  < r
                 if left
                     if sign(delta[1]) == sign(delta[2])
                         if ego_location[1] < center[1] 
@@ -183,46 +191,121 @@ function if_in_segments(seg, ego_location)
     return false
 end
 
-function decision_making(localization_state_channel, 
-        perception_state_channel, 
-        map, 
-        target_road_segment_id, 
-        socket,  gt_channel)
-    goal = map[target_road_segment_id]
-    initial_localization_state = take!(gt_channel)
+function decision_making(gt_channel ,map, target_channel, socket)
+    # goal = map[target_road_segment_id]
+    # initial_localization_state = take!(gt_channel)
 
-    ego_position = initial_localization_state.position
-    @info "initial position: $ego_position"
-    for i in map.path
-        if if_in_segments(i, ego_position)
-            initial_segment = i
-            @info "intial segment: $initial_segment"
-        end
-    end
+    # ego_position = initial_localization_state.position
+    # @info "initial position: $ego_position"
+    # for i in map.path
+    #     if if_in_segments(i, ego_position)
+    #         initial_segment = i
+    #         @info "intial segment: $initial_segment"
+    #     end
+    # end
     
-    res = a_star_solver(map, initial_segment, goal)
-    for i in 1:200
-        latest_localization_state = take!(gt_channel)
-        # @info "latest_localization_state: $latest_localization_state"
-        # latest_perception_state = fetch(perception_state_channel)
-        if if_in_segments(goal, latest_localization_state.position)
-            break
+    # res = a_star_solver(map, initial_segment, goal)
+    # for i in 1:200
+    #     latest_localization_state = take!(gt_channel)
+    #     # @info "latest_localization_state: $latest_localization_state"
+    #     # latest_perception_state = fetch(perception_state_channel)
+    #     if if_in_segments(goal, latest_localization_state.position)
+    #         break
+    #     end
+    #     for i in res.path
+    #         if if_in_segments(i,latest_localization_state.position)
+    #             cur_seg = i
+    #         end
+    #     end        
+    #     # figure out what to do ... setup motion planning problem etc
+    #     steering_angle = 0.0
+    #     target_vel = 0.0
+    #     curvature = cur_seg.lane_boundaries[1].curvature
+    #     if !isapprox(curvature, 0.0; atol=1e-6)
+    #         steering_angle = curvature
+    #     end
+    #     target_vel = cur_seg.speed_limit
+    #     cmd = VehicleCommand(steering_angle, 10, true)
+    #     serialize(socket, cmd)
+    # end
+    gt_vehicle_states = []
+    current_segment = map[32]
+    current_position = [0.0, 0.0]
+    target_road_segment_id = 101
+
+    # trace the segments that the car has been through
+    path = RoadSegment[]
+
+    while true
+        @info "begining decision_making"
+        #latest_localization_state = fetch(localization_state_channel)
+        #latest_perception_state = fetch(perception_state_channel)
+
+        if isready(target_channel)
+            target_road_segment_id = fetch(target_channel)
         end
-        for i in res.path
-            if if_in_segments(i,latest_localization_state.position)
-                cur_seg = i
+
+        while isready(gt_channel)
+            meas = take!(gt_channel)
+            gt_vehicle_states = meas
+            @info "updated"
+        end
+        #sleep(1)
+
+        @info gt_vehicle_states
+
+        if gt_vehicle_states != []
+            current_position = gt_vehicle_states.position[1:2]
+        end
+
+        @info "searching current segment"
+        @info current_position
+
+        # search all map_segments
+        for (key,value) in map
+            if if_in_segments(map[key], current_position)
+                current_segment = map[key]
+                @info "current segment: $current_segment"
             end
-        end        
-        # figure out what to do ... setup motion planning problem etc
-        steering_angle = 0.0
-        target_vel = 0.0
-        curvature = cur_seg.lane_boundaries[1].curvature
-        if !isapprox(curvature, 0.0; atol=1e-6)
-            steering_angle = curvature
         end
-        target_vel = cur_seg.speed_limit
-        cmd = VehicleCommand(steering_angle, 10, true)
+
+        @info "found segment"
+        @info "current segment"
+        @info current_segment
+        @info "target segment"
+        @info map[target_road_segment_id]
+
+        # path finding A_star
+        res = a_star_solver(map, current_segment, map[target_road_segment_id])
+        #@info res
+        ####### print out the whole path from start point to end point ######
+        for i in res.path
+            print(i.id)
+            println(i.children)
+        end
+
+        @info "in the decision_making"
+        steering_angle = 0.0
+        target_vel = 3.0
+        lb_1 = current_segment.lane_boundaries[1]
+        lb_2 = current_segment.lane_boundaries[2]
+        if !isapprox(lb_1.curvature, 0.0; atol=1e-6)
+            if !(current_segment in path)
+                push!(path, current_segment)
+                target_vel = 1.5
+                if abs(lb_1.curvature) > abs(lb_2.curvature)
+                    steering_angle = 1.0
+                else 
+                    steering_angle = -1.0
+                end
+            else
+                sleep(2)
+            end
+        end
+        
+        cmd = VehicleCommand(steering_angle, target_vel, true)
         serialize(socket, cmd)
+        @info "end decision_making"
     end
 end
 
@@ -243,8 +326,9 @@ function my_client(host::IPAddr=IPv4(0), port=4444)
     cam_channel = Channel{CameraMeasurement}(32)
     gt_channel = Channel{GroundTruthMeasurement}(32)
 
-    #localization_state_channel = Channel{MyLocalizationType}(1)
-    #perception_state_channel = Channel{MyPerceptionType}(1)
+    localization_state_channel = Channel{MyLocalizationType}(1)
+    perception_state_channel = Channel{MyPerceptionType}(1)
+    target_channel = Channel(1)
 
     target_map_segment = 0 # (not a valid segment, will be overwritten by message)
     ego_vehicle_id = 0 # (not a valid id, will be overwritten by message. This is used for discerning ground-truth messages)
@@ -254,6 +338,8 @@ function my_client(host::IPAddr=IPv4(0), port=4444)
         # are looking at the latest messages)
         sleep(0.001)
         local measurement_msg
+        #measurement_msg = deserialize(socket)
+
         received = false
         while true
             @async eof(socket)
@@ -265,8 +351,13 @@ function my_client(host::IPAddr=IPv4(0), port=4444)
             end
         end
         !received && continue
+
         target_map_segment = measurement_msg.target_segment
+        if !isfull(target_channel)
+            put!(target_channel, target_map_segment)
+        end
         ego_vehicle_id = measurement_msg.vehicle_id
+
         for meas in measurement_msg.measurements
             if meas isa GPSMeasurement
                 !isfull(gps_channel) && put!(gps_channel, meas)
@@ -280,7 +371,8 @@ function my_client(host::IPAddr=IPv4(0), port=4444)
         end
     end)
 
-    @async localize(gps_channel, imu_channel, localization_state_channel)
-    @async perception(cam_channel, localization_state_channel, perception_state_channel)
-    @async decision_making(localization_state_channel, perception_state_channel, map, socket)
+
+    #@async localize(gps_channel, imu_channel, localization_state_channel)
+    #@async perception(cam_channel, localization_state_channel, perception_state_channel)
+    @async decision_making(gt_channel ,map_segments, target_channel, socket)
 end

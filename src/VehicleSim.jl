@@ -15,6 +15,10 @@ using Suppressor
 using Sockets
 using Serialization
 using StaticArrays
+using Ipopt
+using Symbolics 
+using GLMakie
+using ProgressMeter
 
 include("view_car.jl")
 include("objects.jl")
@@ -26,6 +30,6 @@ include("measurements.jl")
 include("map.jl")
 include("example_project.jl")
 
-export server, shutdown!, keyboard_client
+export server, shutdown!, keyboard_client, my_client, if_in_segments
 
 end
