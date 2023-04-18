@@ -16,10 +16,10 @@ rⁱ is the radius of the i-th vehicle.
 The purpose of this function is to construct functions which can quickly turn 
 updated world information into planning problems that IPOPT can solve.
 """
-function create_callback_generator(localization_state_channel, 
-    perception_state_channel, 
-    cur_seg, 
-    socket)
+function create_callback_generator(vehicle_state, 
+    latest_perception_state, 
+    cur_seg)
+    
     
     # trajectory_length=40, timestep=0.2, R = Diagonal([0.1, 0.5]), max_vel=10.0)
     # Define symbolic variables for all inputs, as well as trajectory
@@ -28,8 +28,8 @@ function create_callback_generator(localization_state_channel,
     # end
 
     Z = let
-         @variables(Z[1:6*trajectory_length]) .|> Symbolics.scalarize
-    nd
+         @variables(Z[1:Inf]) .|> Symbolics.scalarize
+    end
 
     # states, controls = decompose_trajectory(Z)
     # all_states = [[X¹,]; states]
@@ -49,17 +49,16 @@ function create_callback_generator(localization_state_channel,
         # append!(constraints_val, all_states[k+1] .- evolve_state(all_states[k], controls[k], timestep))
         # append!(constraints_lb, zeros(4))
         # append!(constraints_ub, zeros(4))
-        latest_localization_state = fetch(localization_state_channel)
-        latest_perception_state = fetch(perception_state_channel)
+        
 
         if curved
-            append!(constraints_val, lane_constraint_curve_lower(latest_localization_state, cur_seg))
-            append!(constraints_val, lane_constraint_curve_upper(latest_localization_state, cur_seg))
+            append!(constraints_val, lane_constraint_curve_lower(vehicle_state, cur_seg))
+            append!(constraints_val, lane_constraint_curve_upper(vehicle_state, cur_seg))
             append!(constraints_lb, [0.0, -Inf])
             append!(constraints_ub, [Inf, 0.0])
         else
-            append!(constraints_val, lane_constraint_lower(latest_localization_state, cur_seg))
-            append!(constraints_val, lane_constraint_upper(latest_localization_state, cur_seg))
+            append!(constraints_val, lane_constraint_lower(vehicle_state, cur_seg))
+            append!(constraints_val, lane_constraint_upper(vehicle_state, cur_seg))
             append!(constraints_lb, [0.0, -Inf])
             append!(constraints_ub, [Inf, 0.0])
         end
@@ -67,12 +66,12 @@ function create_callback_generator(localization_state_channel,
         
         for i in 1:length(latest_perception_state.x)
             other_vehicle = latest_perception_state.x[i]
-            append!(constraints_val, collision_constraint(latest_localization_state, other_vehicle, ϵ))
+            append!(constraints_val, collision_constraint(vehicle_state, other_vehicle, ϵ))
             append!(constraints_lb, 0)
             append!(constraints_ub, Inf)
         end
         
-        vel = norm(latest_localization_state.velocity)
+        vel = norm(vehicle_state.velocity)
         append!(constraints_val, vel)
         append!(constraints_lb, 0.0)
         append!(constraints_ub, cur_seg.speed_limit)
@@ -98,28 +97,28 @@ function create_callback_generator(localization_state_channel,
     expression = Val{false}
 
     full_cost_fn = let
-        cost_fn = Symbolics.build_function(cost_val, [Z; X¹; X²; X³; r¹; r²; r³; track_center; track_radius; lane_width]; expression)
-        (Z, X¹, X², X³, r¹, r², r³, track_center, track_radius, lane_width) -> cost_fn([Z; X¹; X²; X³; r¹; r²; r³; track_center; track_radius; lane_width])
+        cost_fn = Symbolics.build_function(cost_val, [Z; vehicle_state; latest_perception_state; cur_seg]; expression)
+        (Z, vehicle_state, latest_perception_state, cur_seg) -> cost_fn([Z; vehicle_state; latest_perception_state; cur_seg])
     end
 
     full_cost_grad_fn = let
-        cost_grad_fn! = Symbolics.build_function(cost_grad, [Z; X¹; X²; X³; r¹; r²; r³; track_center; track_radius; lane_width]; expression)[2]
-        (grad, Z, X¹, X², X³, r¹, r², r³, track_center, track_radius, lane_width) -> cost_grad_fn!(grad, [Z; X¹; X²; X³; r¹; r²; r³; track_center; track_radius; lane_width])
+        cost_grad_fn! = Symbolics.build_function(cost_grad, [Z; vehicle_state; latest_perception_state; cur_seg]; expression)[2]
+        (grad, Z, vehicle_state, latest_perception_state, cur_seg) -> cost_grad_fn!(grad, [Z; vehicle_state; latest_perception_state; cur_seg])
     end
 
     full_constraint_fn = let
-        constraint_fn! = Symbolics.build_function(constraints_val, [Z; localization_state_channel; perception_state_channel; cur_seg; socket]; expression)[2]
-        (cons, localization_state_channel, perception_state_channel, cur_seg; socket) -> constraint_fn!(cons, [localization_state_channel; perception_state_channel; cur_seg; socket])
+        constraint_fn! = Symbolics.build_function(constraints_val, [Z; vehicle_state; latest_perception_state; cur_seg]; expression)[2]
+        (cons, Z, vehicle_state, latest_perception_state, cur_seg) -> constraint_fn!(cons, [Z; vehicle_state; latest_perception_state; cur_seg])
     end
 
     full_constraint_jac_vals_fn = let
-        constraint_jac_vals_fn! = Symbolics.build_function(constraints_val, [Z; localization_state_channel; perception_state_channel; cur_seg; socket]; expression)[2]
-        (cons, localization_state_channel, perception_state_channel, cur_seg; socket) -> constraint_jac_vals_fn!(cons, [localization_state_channel; perception_state_channel; cur_seg; socket])
+        constraint_jac_vals_fn! = Symbolics.build_function(constraints_val, [Z; vehicle_state; latest_perception_state; cur_seg]; expression)[2]
+        (cons, Z, vehicle_state, latest_perception_state, cur_seg) -> constraint_jac_vals_fn!(cons, [Z; localization_state_channel; perception_state_channel; cur_seg; socket])
     end
     
     full_hess_vals_fn = let
-        hess_vals_fn! = Symbolics.build_function(hess_vals, [Z; X¹; X²; X³; r¹; r²; r³; track_center; track_radius; lane_width; λ; cost_scaling]; expression)[2]
-        (vals, Z, X¹, X², X³, r¹, r², r³, track_center, track_radius, lane_width, λ, cost_scaling) -> hess_vals_fn!(vals, [Z; X¹; X²; X³; r¹; r²; r³; track_center; track_radius; lane_width; λ; cost_scaling])
+        hess_vals_fn! = Symbolics.build_function(hess_vals, [Z; vehicle_state; latest_perception_state; cur_seg; λ; cost_scaling]; expression)[2]
+        (vals, Z,  vehicle_state, latest_perception_state, cur_seg, λ, cost_scaling) -> hess_vals_fn!(vals, [Z; vehicle_state; latest_perception_state; cur_seg; λ; cost_scaling])
     end
 
     full_constraint_jac_triplet = (; jac_rows, jac_cols, full_constraint_jac_vals_fn)
@@ -159,9 +158,9 @@ Predict a dummy trajectory for other vehicles.
 #     X + Δ * [V*cos(θ), V*sin(θ), U[1], U[2]]
 # end
 
-function lane_constraint_curve_lower(latest_localization_state, seg)
+function lane_constraint_curve_lower(vehicle_state, seg)
     #a'*(X[1:2] - a*r)-b
-    ego_position = latest_localization_state.position[1:2]
+    ego_position = vehicle_state.position[1:2]
     lb_1 = seg.lane_boundaries[1]
     if length(seg.lane_boundaries) == 2
         lb_2 = seg.lane_boundaries[2]
@@ -196,12 +195,17 @@ function lane_constraint_curve_lower(latest_localization_state, seg)
             center = pt_a + [0, delta[2]]
         end
     end
-    (ego_position[1:2]-center[1:2])'*(ego_position[1:2]-center[1:2]) - (rad_1+rad_2-0.5*14.3781)^2
+    if rad_1 < rad_2
+        min = rad_1
+    else
+        min = rad_2
+    end
+    (ego_position[1:2]-center[1:2])'*(ego_position[1:2]-center[1:2]) - (min+14.3781)^2
 end
 
 
-function lane_constraint_curve_upper(latest_localization_state, seg)
-    ego_position = latest_localization_state.position[1:2]
+function lane_constraint_curve_upper(vehicle_state, seg)
+    ego_position = vehicle_state.position[1:2]
     lb_1 = seg.lane_boundaries[1]
     if length(seg.lane_boundaries) == 2
         lb_2 = seg.lane_boundaries[2]
@@ -236,11 +240,16 @@ function lane_constraint_curve_upper(latest_localization_state, seg)
             center = pt_a + [0, delta[2]]
         end
     end
-    (ego_position[1:2]-center[1:2])'*(ego_position[1:2]-center[1:2]) - (rad_2+0.5*14.3781-rad_1)^2
+    if rad_1 > rad_2
+        max = rad_1
+    else
+        max = rad_2
+    end
+    (ego_position[1:2]-center[1:2])'*(ego_position[1:2]-center[1:2]) - (max-14.3781)^2
 end
 
-function lane_constraint_lower(latest_localization_state, seg)
-    ego_position = latest_localization_state.position[1:2]
+function lane_constraint_lower(vehicle_state, seg)
+    ego_position = vehicle_state.position[1:2]
     lb_1 = seg.lane_boundaries[1]
 
     pt_a = lb_1.pt_a
@@ -249,8 +258,8 @@ function lane_constraint_lower(latest_localization_state, seg)
     pt_a'*(ego_position - pt_a*14.3781)-b
 end
 
-function lane_constraint_upper(latest_localization_state, seg)
-    ego_position = latest_localization_state.position[1:2]
+function lane_constraint_upper(vehicle_state, seg)
+    ego_position = vehicle_state.position[1:2]
     if length(seg.lane_boundaries) == 2
         lb_2 = seg.lane_boundaries[2]
     else

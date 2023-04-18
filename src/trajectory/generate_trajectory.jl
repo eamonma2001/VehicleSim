@@ -76,9 +76,8 @@
 
 function generate_trajectory(localization_state_channel, 
     perception_state_channel, 
-    map, 
-    target_road_segment_id, 
-    socket,  gt_channel)
+    cur_seg, 
+    ,  gt_channel)
     
     # ego, V2, V3, lane_width, track_radius, track_center, callbacks, timestep, trajectory_length)
     # X1 = ego.state
@@ -87,26 +86,32 @@ function generate_trajectory(localization_state_channel,
     # r1 = ego.r
     # r2 = V2.r
     # r3 = V3.r
-   
+    latest_localization_state = fetch(localization_state_channel)
+    latest_perception_state = fetch(perception_state_channel)
+
+    vehicle_state = latest_localization_state.x
+
     # TODO refine callbacks given current positions of vehicles, lane geometry,
     # etc.
-    callbacks = create_callback_generator(traj_length, timestep, R, max_vel)
+    callbacks = create_callback_generator(vehicle_state, 
+    latest_perception_state, 
+    cur_seg)
     
     wrapper_f = function(z)
-        callbacks.full_cost_fn(z, X1, X2, X3, r1, r2, r3, track_center, track_radius, lane_width)
+        callbacks.full_cost_fn(z, vehicle_state, latest_perception_state, cur_seg)
     end
     wrapper_grad_f = function(z, grad)
-        callbacks.full_cost_grad_fn(grad, z, X1, X2, X3, r1, r2, r3, track_center, track_radius, lane_width)
+        callbacks.full_cost_grad_fn(grad, z, vehicle_state, latest_perception_state, cur_seg)
     end
     wrapper_con = function(z, con)
-        callbacks.full_constraint_fn(con, z, X1, X2, X3, r1, r2, r3, track_center, track_radius, lane_width)
+        callbacks.full_constraint_fn(con, z, vehicle_state, latest_perception_state, cur_seg)
     end
     wrapper_con_jac = function(z, rows, cols, vals)
         if isnothing(vals)
             rows .= callbacks.full_constraint_jac_triplet.jac_rows
             cols .= callbacks.full_constraint_jac_triplet.jac_cols
         else
-            callbacks.full_constraint_jac_triplet.full_constraint_jac_vals_fn(vals, z, X1, X2, X3, r1, r2, r3, track_center, track_radius, lane_width)
+            callbacks.full_constraint_jac_triplet.full_constraint_jac_vals_fn(vals, z, vehicle_state, latest_perception_state, cur_seg)
         end
         nothing
     end
@@ -115,12 +120,12 @@ function generate_trajectory(localization_state_channel,
             rows .= callbacks.full_lag_hess_triplet.hess_rows
             cols .= callbacks.full_lag_hess_triplet.hess_cols
         else
-            callbacks.full_lag_hess_triplet.full_hess_vals_fn(vals, z, X1, X2, X3, r1, r2, r3, track_center, track_radius, lane_width, λ, cost_scaling)
+            callbacks.full_lag_hess_triplet.full_hess_vals_fn(vals, z, vehicle_state, latest_perception_state, cur_seg, λ, cost_scaling)
         end
         nothing
     end
 
-    n = trajectory_length*6
+    n = Inf
     m = length(callbacks.constraints_lb)
     prob = Ipopt.CreateIpoptProblem(
         n,
@@ -138,10 +143,10 @@ function generate_trajectory(localization_state_channel,
         wrapper_lag_hess
     )
 
-    controls = repeat([zeros(2),], trajectory_length)
-    states = repeat([X1,], trajectory_length)
-    zinit = compose_trajectory(states, controls)
-    prob.x = zinit
+    controls = repeat([zeros(2),], 200)
+    #states = repeat([X1,], trajectory_length)
+    #zinit = compose_trajectory(states, controls)
+    #prob.x = zinit
 
     Ipopt.AddIpoptIntOption(prob, "print_level", 0)
     status = Ipopt.IpoptSolve(prob)
@@ -149,8 +154,8 @@ function generate_trajectory(localization_state_channel,
     if status != 0
         @warn "Problem not cleanly solved. IPOPT status is $(status)."
     end
-    states, controls = decompose_trajectory(prob.x)
-    (; states, controls, status)
+    #states, controls = decompose_trajectory(prob.x)
+    (; controls, status)
 end
 
 # function visualize_simulation(sim_results, track_radius, track_center, lane_width)
