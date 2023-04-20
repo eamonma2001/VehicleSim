@@ -19,6 +19,7 @@ using Ipopt
 using Symbolics 
 using GLMakie
 using ProgressMeter
+using LazySets
 
 include("view_car.jl")
 include("objects.jl")
@@ -30,6 +31,6 @@ include("measurements.jl")
 include("map.jl")
 include("example_project.jl")
 
-export server, shutdown!, keyboard_client, my_client, if_in_segments
+export server, shutdown!, keyboard_client, my_client, get_lane_half_space
 
 end

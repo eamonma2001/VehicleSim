@@ -36,7 +36,7 @@ res = a_star_solver(map_segments, start, goal)
 
 ####### print out the whole path from start point to end point ######
 
-for i in res.path
-    print(i.id)
-    println(i.children)
-end
+# for i in res.path
+#     print(i.id)
+#     println(i.children)
+# end

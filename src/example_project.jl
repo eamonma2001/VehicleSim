@@ -191,43 +191,26 @@ function if_in_segments(seg, ego_location)
     return false
 end
 
-function decision_making(gt_channel ,map, target_channel, socket)
-    # goal = map[target_road_segment_id]
-    # initial_localization_state = take!(gt_channel)
-
-    # ego_position = initial_localization_state.position
-    # @info "initial position: $ego_position"
-    # for i in map.path
-    #     if if_in_segments(i, ego_position)
-    #         initial_segment = i
-    #         @info "intial segment: $initial_segment"
-    #     end
-    # end
+function get_lane_half_space(lane_boundary::LaneBoundary, lane_width::Float64)
+    pt_b = lane_boundary.pt_b
+    pt_a = lane_boundary.pt_a 
+    line_direction = pt_b - pt_a
+    line_normal = SVector(-line_direction[2], line_direction[1])
     
-    # res = a_star_solver(map, initial_segment, goal)
-    # for i in 1:200
-    #     latest_localization_state = take!(gt_channel)
-    #     # @info "latest_localization_state: $latest_localization_state"
-    #     # latest_perception_state = fetch(perception_state_channel)
-    #     if if_in_segments(goal, latest_localization_state.position)
-    #         break
-    #     end
-    #     for i in res.path
-    #         if if_in_segments(i,latest_localization_state.position)
-    #             cur_seg = i
-    #         end
-    #     end        
-    #     # figure out what to do ... setup motion planning problem etc
-    #     steering_angle = 0.0
-    #     target_vel = 0.0
-    #     curvature = cur_seg.lane_boundaries[1].curvature
-    #     if !isapprox(curvature, 0.0; atol=1e-6)
-    #         steering_angle = curvature
-    #     end
-    #     target_vel = cur_seg.speed_limit
-    #     cmd = VehicleCommand(steering_angle, 10, true)
-    #     serialize(socket, cmd)
-    # end
+    # Normalize the normal vector
+    line_normal /= norm(line_normal)
+    
+    # Compute the distance from the line segment to the origin
+    line_distance = dot(line_normal, pt_a)
+    
+    # Define the half space
+    half_space_normal = line_normal
+    half_space_distance = line_distance + lane_width/2
+    
+    return HalfSpace(half_space_normal, half_space_distance)
+end
+
+function decision_making(gt_channel ,map, target_channel, socket)
     gt_vehicle_states = []
     current_segment = map[32]
     current_position = [0.0, 0.0]
@@ -286,20 +269,36 @@ function decision_making(gt_channel ,map, target_channel, socket)
 
         @info "in the decision_making"
         steering_angle = 0.0
-        target_vel = 3.0
+        target_vel = 3#current_segment.speed_limit
         lb_1 = current_segment.lane_boundaries[1]
         lb_2 = current_segment.lane_boundaries[2]
+        #if isapprox(lb_1.curvature, 0.0; atol=1e-6)
+        half_space_1 = get_lane_half_space(lb_1,10.0)
+        half_space_2 = get_lane_half_space(lb_2,10.0)
+
+        #pos = (half_space.a)'*current_position
+        #if !(current_segment in path)
+            #push!(path, current_segment)
+        
+        if (half_space_1.a)'*(current_position-half_space_1.a*5.7/2) - half_space_1.b > -0.1
+            steering_angle = 0.2
+        elseif (half_space_2.a)'*(current_position-half_space_2.a*5.7/2) - half_space_2.b > -0.1
+            steering_angle = -0.2
+        end
+            #end
+        #end
         if !isapprox(lb_1.curvature, 0.0; atol=1e-6)
             if !(current_segment in path)
                 push!(path, current_segment)
+                sleep(2)
                 target_vel = 1.5
                 if abs(lb_1.curvature) > abs(lb_2.curvature)
-                    steering_angle = 1.0
+                    steering_angle = 1.5708
                 else 
-                    steering_angle = -1.0
+                    steering_angle = -1.5708
                 end
             else
-                sleep(2)
+                sleep(3)
             end
         end
         
