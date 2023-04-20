@@ -30,6 +30,7 @@ include("sink.jl")
 include("measurements.jl")
 include("map.jl")
 include("example_project.jl")
+include("ekf_local.jl")
 
 export server, shutdown!, keyboard_client, my_client, get_lane_half_space
 

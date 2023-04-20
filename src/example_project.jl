@@ -29,27 +29,109 @@ struct MyPerceptionType
 end
 
 function localize(gps_channel, imu_channel, localization_state_channel)
-    # Set up algorithm / initialize variables
-    while true
-        fresh_gps_meas = []
-        while isready(gps_channel)
-            meas = take!(gps_channel)
-            push!(fresh_gps_meas, meas)
-        end
-        fresh_imu_meas = []
-        while isready(imu_channel)
-            meas = take!(imu_channel)
-            push!(fresh_imu_meas, meas)
-        end
-        
-        # process measurements
 
-        localization_state = MyLocalizationType(0,0.0)
-        if isready(localization_state_channel)
-            take!(localization_state_channel)
+    @info "localize function"
+    μ =[0, 0, 2.645, 0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1]
+
+
+    Σ=Diagonal([50,50,0.5,1, 1, 1, 1, 3, 3, 3, 0.5, 0.5, 0.5])
+
+
+    initial_gps = GPSMeasurement( 0.0, 0.0, 0.0, 0.05)
+    initial_imu = IMUMeasurement( 0.0, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0])
+  
+    fresh_gps_meas = [initial_gps,] # Just to set the initial time to be 0
+    fresh_imu_meas = [initial_imu,]
+    latest_meas_time = -Inf
+    # all_meas = []
+    # push!(all_meas, initial_imu)
+    # push!(all_meas, initial_gps)
+
+    first_imu = true
+    first_gps = true
+
+    while true
+        sleep(0.001)
+        #@info "in loop"
+        all_meas = []
+
+        # time::Float64
+        # lat::Float64
+        # long::Float64
+        # heading::Float64
+        while isready(gps_channel)
+            sleep(0.001)
+            @info "in gps"
+            meas = take!(gps_channel)
+            if(first_gps)
+
+                μ[1] = meas.lat
+                μ[2] = meas.long
+                quat = euler_to_quaternion(meas.heading, 0, 0)
+                μ[10] = quat[4]
+                μ[11] = quat[1]
+                μ[12] = quat[2]
+                μ[13] = quat[3]
+                first_gps = false
+            end                
+            @info "gpsmeas : $(meas)"
+            push!(all_meas, meas)
+
         end
-        put!(localization_state_channel, localization_state)
-    end 
+
+        while isready(imu_channel)
+            sleep(0.001)
+            @info "in imu"
+            meas = take!(imu_channel)
+            if(first_imu)
+                μ[4] = meas.linear_vel[1]
+                μ[5] = meas.linear_vel[2]
+                μ[6] = meas.linear_vel[3]
+                μ[7] = meas.angular_vel[1]
+                μ[8] = meas.angular_vel[2]
+                μ[9] = meas.angular_vel[3]
+                first_imu = false
+            end
+            @info "imumeas : $(meas)"
+            push!(all_meas, meas)
+        end
+
+       # @info "all_meas : $(all_meas)"
+        sorted_all_meas = sort(all_meas, by = x -> x.time)
+
+        start = 1
+
+        for i in 1 : length(sorted_all_meas)
+            if sorted_all_meas[i].time >= latest_meas_time
+                start = i 
+                break
+            end
+        end
+       
+        # throw away any measuremetns in all_meas that are from BEFORE last_meas_time
+
+        if length(all_meas) == 0 
+            continue
+        else
+            for i in 1 : length(sorted_all_meas)
+            
+
+                dt = sorted_all_meas[i].time - latest_meas_time
+                if dt == Inf 
+                    dt = 0.05
+                end
+            @info "211"
+            # @info "$(sorted_all_meas[i])"
+            # @info "$(dt)"
+            # @info "$(μ)"
+            # @info "$(Σ)"
+            # @info "$(localization_state_channel)"
+          #      @info "sorted : $(sorted_all_meas[i])"
+                filter(sorted_all_meas[i], dt, μ , Σ,  localization_state_channel)
+                latest_meas_time = sorted_all_meas[i].time
+            end
+        end
+    end
 end
 
 function perception(cam_meas_channel, localization_state_channel, perception_state_channel)
@@ -210,11 +292,12 @@ function get_lane_half_space(lane_boundary::LaneBoundary, lane_width::Float64)
     return HalfSpace(half_space_normal, half_space_distance)
 end
 
-function decision_making(gt_channel ,map, target_channel, socket)
+function decision_making(gt_channel ,map, target_channel, ego_vehicle_id_channel, socket)
     gt_vehicle_states = []
     current_segment = map[32]
     current_position = [0.0, 0.0]
     target_road_segment_id = 101
+    ego_vehicle_id = 1
 
     # trace the segments that the car has been through
     path = RoadSegment[]
@@ -228,10 +311,18 @@ function decision_making(gt_channel ,map, target_channel, socket)
             target_road_segment_id = fetch(target_channel)
         end
 
+        if isready(ego_vehicle_id_channel)
+            ego_vehicle_id = fetch(ego_vehicle_id_channel)
+        end
+
+        @info "current ego vehicle id: $ego_vehicle_id"
+
         while isready(gt_channel)
             meas = take!(gt_channel)
-            gt_vehicle_states = meas
-            @info "updated"
+            if meas.vehicle_id == ego_vehicle_id
+                gt_vehicle_states = meas
+                @info "updated"
+            end
         end
         #sleep(1)
 
@@ -269,7 +360,7 @@ function decision_making(gt_channel ,map, target_channel, socket)
 
         @info "in the decision_making"
         steering_angle = 0.0
-        target_vel = 3#current_segment.speed_limit
+        target_vel = 3.5#current_segment.speed_limit
         lb_1 = current_segment.lane_boundaries[1]
         lb_2 = current_segment.lane_boundaries[2]
         #if isapprox(lb_1.curvature, 0.0; atol=1e-6)
@@ -279,12 +370,17 @@ function decision_making(gt_channel ,map, target_channel, socket)
         #pos = (half_space.a)'*current_position
         #if !(current_segment in path)
             #push!(path, current_segment)
+
+            
         
-        if (half_space_1.a)'*(current_position-half_space_1.a*5.7/2) - half_space_1.b > -0.1
+        if (half_space_1.a)'*(current_position-half_space_1.a*5.7/2) - half_space_1.b > 3
+            @info "steering angle left"
             steering_angle = 0.2
-        elseif (half_space_2.a)'*(current_position-half_space_2.a*5.7/2) - half_space_2.b > -0.1
+        elseif (half_space_2.a)'*(current_position-half_space_2.a*5.7/2) - half_space_2.b > 3
+            @info "steering angle right"
             steering_angle = -0.2
         end
+        
             #end
         #end
         if !isapprox(lb_1.curvature, 0.0; atol=1e-6)
@@ -300,6 +396,16 @@ function decision_making(gt_channel ,map, target_channel, socket)
             else
                 sleep(3)
             end
+        end
+
+        count = 0
+        if current_segment.lane_types == "stop_sign"
+            target_vel = 0.0
+            count += 1
+            #sleep(3)
+        end
+        if count == 1
+            sleep(3)
         end
         
         cmd = VehicleCommand(steering_angle, target_vel, true)
@@ -328,6 +434,7 @@ function my_client(host::IPAddr=IPv4(0), port=4444)
     localization_state_channel = Channel{MyLocalizationType}(1)
     perception_state_channel = Channel{MyPerceptionType}(1)
     target_channel = Channel(1)
+    ego_vehicle_id_channel = Channel(1)
 
     target_map_segment = 0 # (not a valid segment, will be overwritten by message)
     ego_vehicle_id = 0 # (not a valid id, will be overwritten by message. This is used for discerning ground-truth messages)
@@ -355,7 +462,11 @@ function my_client(host::IPAddr=IPv4(0), port=4444)
         if !isfull(target_channel)
             put!(target_channel, target_map_segment)
         end
+        
         ego_vehicle_id = measurement_msg.vehicle_id
+        if !isfull(ego_vehicle_id_channel)
+            put!(ego_vehicle_id_channel, ego_vehicle_id)
+        end
 
         for meas in measurement_msg.measurements
             if meas isa GPSMeasurement
@@ -371,7 +482,7 @@ function my_client(host::IPAddr=IPv4(0), port=4444)
     end)
 
 
-    #@async localize(gps_channel, imu_channel, localization_state_channel)
+    @async localize(gps_channel, imu_channel, localization_state_channel)
     #@async perception(cam_channel, localization_state_channel, perception_state_channel)
-    @async decision_making(gt_channel ,map_segments, target_channel, socket)
+    @async decision_making(gt_channel ,map_segments, target_channel, ego_vehicle_id_channel, socket)
 end
