@@ -13,9 +13,9 @@ function euler_to_quaternion(yaw, pitch, roll)
 end
 
 
-function extract_yaw_from_quaternion(q)
-    atan(2(q[1]*q[4]+q[2]*q[3]), 1-2*(q[3]^2+q[4]^2))
-end
+# function extract_yaw_from_quaternion(q)
+#     atan(2(q[1]*q[4]+q[2]*q[3]), 1-2*(q[3]^2+q[4]^2))
+# end
 
 # function J_Tbody(x)
 #     J_Tbody_xyz = (zeros(3,4), zeros(3,4), zeros(3,4))
@@ -297,23 +297,31 @@ function filter(meas, Δ,  μ , Σ, localization_state_channel)
     Σ̂ = A * Σ_prev * A' + proc_cov
 
     if meas isa GPSMeasurement
-        @info " GPS"
+        @info " GPS begin"
+        #@info " tmp_z : $(tmp_z)"
         tmp_z = []
         
+        #@info "GPS 1"
         push!(tmp_z, z.lat)
         push!(tmp_z, z.long)
         push!(tmp_z, z.heading)
+        #@info "GPS 2"
         C = jac_h_gps(μ̂) # gps version
         d = h_gps(μ̂) - C*μ̂ # gps version
         Σ = inv(inv(Σ̂) + C'*inv(meas_var_gps)*C)
+        @info "GPS 3"
         μ = Σ * (inv(Σ̂) * μ̂ + C' * inv(meas_var_gps) * (tmp_z - d))
+        @info "μ : $(μ)"
         full_state = FullVehicleState(μ[1:3], μ[8:10], μ[11:13], μ[4:7])
         local_state = MyLocalizationType( meas.time, full_state)
-        if isready(localization_state_channel)
-            take!(localization_state_channel)
-        end
+        @info "GPS 4"
+        !iffull(localization_state_channel) && put!(localization_state_channel, local_state)
+        # if isfull(localization_state_channel)
+        #     take!(localization_state_channel)
+        # end
+        # @info "GPS 5"
         @info "$(local_state)"
-        put!(localization_state_channel, local_state)
+        # put!(localization_state_channel, local_state)
       #  @info "finished"
     else
         @info " IMU"
@@ -336,12 +344,12 @@ function filter(meas, Δ,  μ , Σ, localization_state_channel)
         full_state = FullVehicleState(μ[1:3],μ[8:10], μ[11:13], μ[4:7])
 
         local_state = MyLocalizationType(meas.time, full_state)
-        if isready(localization_state_channel)
-            take!(localization_state_channel)
-        end
-
+        # if isfull(localization_state_channel)
+        #     take!(localization_state_channel)
+        # end
+        !iffull(localization_state_channel) && put!(localization_state_channel, local_state)
         @info "$(local_state)"
-        put!(localization_state_channel, local_state)
+        # put!(localization_state_channel, local_state)
     end
 
 end
