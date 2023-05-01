@@ -1,5 +1,6 @@
 include("./tools/astar.jl")
 include("perception.jl")
+include("check_collision.jl")
 #include("./trajectory/HW2.jl")
 
 struct SimpleVehicleState
@@ -455,11 +456,25 @@ function get_mid_half_space_right(seg)
     return halfspace_right(pt_a,pt_b)
 end
 
+function test_check_collision()
+    position = SVector{3, Float64}([1.0,1.0,1.0])
+    velocity = SVector{3, Float64}([1.0,1.0,1.0])
+    angular_vel = SVector{3, Float64}([1.0,1.0,1.0])
+    orientation = SVector{4, Float64}([1.0,1.0,1.0,1.0])
+    ego_vehicle_state = FullVehicleState(position,velocity,angular_vel,orientation)
+    other_vehicle_state = SimpleVehicleState(1.0,1.0,0.5,1.0,1.0,1.0,1.0)
+    collide = check_collision(ego_vehicle_state, other_vehicle_state)
+    @info collide
+    other_vehicle_state2 = SimpleVehicleState(4.0,4.0,0.5,1.0,1.0,1.0,1.0)
+    collide2 = check_collision(ego_vehicle_state, other_vehicle_state2)
+    @info collide2
+end
+
 function check_collision(ego_vehicle_state, other_vehicle_state)
     rotation = Rot_from_quat(ego_vehicle_state.orientation)
-    ego_polygon = polygon(ego_vehicle_state.position[1],ego_vehicle_state.position[2],rotation,13.2,5.7)
+    ego_polygon = polygon(ego_vehicle_state.position[1],ego_vehicle_state.position[2],rotation[1],13.2,5.7)
     other_polygon = polygon(other_vehicle_state.p1, other_vehicle_state.p2, other_vehicle_state.θ, other_vehicle_state.l, other_vehicle_state.w)
-    return collision_checker(ego_polygon, other_polygon)
+    return overlap(ego_polygon, other_polygon)
 end
 
 
@@ -649,11 +664,11 @@ function decision_making(gt_channel, perception_state_channel, map, target_chann
         count = 0
         if current_segment.lane_types == "stop_sign"
             count = count + 1
-            if count < 4
+            if count < 1000
                 target_vel = 0.0
                 cmd = VehicleCommand(steering_angle, 0.0, true)
                 serialize(socket, cmd)
-                sleep(3)
+                sleep(15)
                 continue
             end
         end

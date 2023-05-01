@@ -33,6 +33,6 @@ include("map.jl")
 include("example_project.jl")
 include("ekf_local.jl")
 
-export server, shutdown!, keyboard_client, my_client, get_lane_half_space, if_in_segments, get_mid_half_space_left, get_mid_half_space_right
+export server, shutdown!, keyboard_client, my_client, get_lane_half_space, if_in_segments, get_mid_half_space_left, get_mid_half_space_right, collision_checker, test_check_collision
 
 end
