@@ -280,68 +280,68 @@ The extended Kalman filter update equations can be implemented as the following:
 
 """
 function filter(meas, Δ,  μ , Σ, localization_state_channel)
-    #  @info " f1"
-      meas_var = Diagonal([1 ;1; 0.05;0.1;0.1;0.1;0.1;0.05;0.05;0.05;0.05;0.05;0.05]) 
-      meas_var_gps = Diagonal([0.05,0.05, 0.05])
-      meas_var_imu = Diagonal([0.05,0.05,0.05,0.05,0.05,0.05]) 
-  
-      proc_cov = Diagonal([0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1])
-      x_prev = μ
-      Σ_prev = Σ
-      xₖ = f(x_prev[1:3], x_prev[4:7], x_prev[8:10], x_prev[11:13], Δ) #Current x
-      z = meas
-      A = jac_fx(xₖ, Δ)  
-      μ̂ = f(x_prev[1:3], x_prev[4:7], x_prev[8:10], x_prev[11:13],  Δ)
-  
-    #  @info "f2"
-      Σ̂ = A * Σ_prev * A' + proc_cov
-  
-      if meas isa GPSMeasurement
-          @info " GPS"
-          tmp_z = []
-          
-          push!(tmp_z, z.lat)
-          push!(tmp_z, z.long)
-          push!(tmp_z, z.heading)
-          C = jac_h_gps(μ̂) # gps version
-          d = h_gps(μ̂) - C*μ̂ # gps version
-          Σ = inv(inv(Σ̂) + C'*inv(meas_var_gps)*C)
-          μ = Σ * (inv(Σ̂) * μ̂ + C' * inv(meas_var_gps) * (tmp_z - d))
-          full_state = FullVehicleState(μ[1:3], μ[8:10], μ[11:13], μ[4:7])
-          local_state = MyLocalizationType( meas.time, full_state)
-          if isready(localization_state_channel)
-              take!(localization_state_channel)
-          end
-          @info "$(local_state)"
-          put!(localization_state_channel, local_state)
-        #  @info "finished"
-      else
-          @info " IMU"
-          tmp_z = []
-          push!(tmp_z, z.linear_vel[1])
-          push!(tmp_z, z.linear_vel[2])
-          push!(tmp_z, z.linear_vel[3])
-          push!(tmp_z, z.angular_vel[1])
-          push!(tmp_z, z.angular_vel[2])
-          push!(tmp_z, z.angular_vel[3])
-  
-       #   @info " imu 1"
-          C = jac_h_imu(μ̂) # imu version
-         # @info " imu 4"
-          d = h_imu(μ̂) - C*μ̂ # imu version
-        #  @info " imu 2"
-          Σ = inv(inv(Σ̂) + C'*inv(meas_var_imu)*C)
-          μ = Σ * (inv(Σ̂) * μ̂ + C'* (meas_var_imu) * (tmp_z - d))
-        #  @info " imu 3"
-          full_state = FullVehicleState(μ[1:3],μ[8:10], μ[11:13], μ[4:7])
-  
-          local_state = MyLocalizationType(meas.time, full_state)
-          if isready(localization_state_channel)
-              take!(localization_state_channel)
-          end
-  
-          @info "$(local_state)"
-          put!(localization_state_channel, local_state)
+  #  # # @info " f1"
+  meas_var = Diagonal([1 ;1; 0.05;0.1;0.1;0.1;0.1;0.05;0.05;0.05;0.05;0.05;0.05]) 
+  meas_var_gps = Diagonal([0.05,0.05, 0.05])
+  meas_var_imu = Diagonal([0.05,0.05,0.05,0.05,0.05,0.05]) 
+
+  proc_cov = Diagonal([0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1])
+  x_prev = μ
+  Σ_prev = Σ
+  xₖ = f(x_prev[1:3], x_prev[4:7], x_prev[8:10], x_prev[11:13], Δ) #Current x
+  z = meas
+  A = jac_fx(xₖ, Δ)  
+  μ̂ = f(x_prev[1:3], x_prev[4:7], x_prev[8:10], x_prev[11:13],  Δ)
+
+#  @info "f2"
+  Σ̂ = A * Σ_prev * A' + proc_cov
+
+  if meas isa GPSMeasurement
+      @info " GPS"
+      tmp_z = []
+      
+      push!(tmp_z, z.lat)
+      push!(tmp_z, z.long)
+      push!(tmp_z, z.heading)
+      C = jac_h_gps(μ̂) # gps version
+      d = h_gps(μ̂) - C*μ̂ # gps version
+      Σ = inv(inv(Σ̂) + C'*inv(meas_var_gps)*C)
+      μ = Σ * (inv(Σ̂) * μ̂ + C' * inv(meas_var_gps) * (tmp_z - d))
+      full_state = FullVehicleState(μ[1:3], μ[8:10], μ[11:13], μ[4:7])
+      local_state = MyLocalizationType( meas.time, full_state)
+      if isready(localization_state_channel)
+          take!(localization_state_channel)
       end
-  
+      @info "$(local_state)"
+      put!(localization_state_channel, local_state)
+    #  @info "finished"
+  else
+      @info " IMU"
+      tmp_z = []
+      push!(tmp_z, z.linear_vel[1])
+      push!(tmp_z, z.linear_vel[2])
+      push!(tmp_z, z.linear_vel[3])
+      push!(tmp_z, z.angular_vel[1])
+      push!(tmp_z, z.angular_vel[2])
+      push!(tmp_z, z.angular_vel[3])
+
+   #   @info " imu 1"
+      C = jac_h_imu(μ̂) # imu version
+     # @info " imu 4"
+      d = h_imu(μ̂) - C*μ̂ # imu version
+    #  @info " imu 2"
+      Σ = inv(inv(Σ̂) + C'*inv(meas_var_imu)*C)
+      μ = Σ * (inv(Σ̂) * μ̂ + C'* (meas_var_imu) * (tmp_z - d))
+    #  @info " imu 3"
+      full_state = FullVehicleState(μ[1:3],μ[8:10], μ[11:13], μ[4:7])
+
+      local_state = MyLocalizationType(meas.time, full_state)
+      if isready(localization_state_channel)
+          take!(localization_state_channel)
+      end
+
+      @info "local: state$(local_state)"
+      put!(localization_state_channel, local_state)
   end
+
+end

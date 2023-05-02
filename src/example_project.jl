@@ -45,22 +45,14 @@ function localize(gps_channel, imu_channel, localization_state_channel)
     fresh_gps_meas = [initial_gps,] # Just to set the initial time to be 0
     fresh_imu_meas = [initial_imu,]
     latest_meas_time = -Inf
-    # all_meas = []
-    # push!(all_meas, initial_imu)
-    # push!(all_meas, initial_gps)
-
+ 
     first_imu = true
     first_gps = true
 
     while true
         sleep(0.001)
-        #@info "in loop"
-        all_meas = []
 
-        # time::Float64
-        # lat::Float64
-        # long::Float64
-        # heading::Float64
+        all_meas = []
         while isready(gps_channel)
             sleep(0.001)
             @info "in gps"
@@ -135,7 +127,6 @@ function localize(gps_channel, imu_channel, localization_state_channel)
         end
     end
 end
-
 
 function perception(cam_meas_channel, localization_state_channel, perception_state_channel)
 
