@@ -136,6 +136,7 @@ function localize(gps_channel, imu_channel, localization_state_channel)
     end
 end
 
+
 function perception(cam_meas_channel, localization_state_channel, perception_state_channel)
 
     while true
@@ -664,11 +665,11 @@ function decision_making(gt_channel, perception_state_channel, map, target_chann
         count = 0
         if current_segment.lane_types == "stop_sign"
             count = count + 1
-            if count < 1000
+            if count < 4
                 target_vel = 0.0
                 cmd = VehicleCommand(steering_angle, 0.0, true)
                 serialize(socket, cmd)
-                sleep(15)
+                sleep(3)
                 continue
             end
         end
